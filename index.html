@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Harga BTCUSDT Real-time</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            background-color: #1e1e1e;
+            padding: 2em;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            width: 90%;
+            max-width: 500px;
+        }
+        h1 {
+            color: #ff9800;
+        }
+        .price-display {
+            font-size: 3em;
+            font-weight: bold;
+            margin: 0.5em 0;
+            color: #4caf50;
+        }
+        .last-updated {
+            font-size: 0.8em;
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Harga BTCUSDT</h1>
+    <div class="price-display" id="price">Memuat...</div>
+    <div class="last-updated" id="last-updated"></div>
+</div>
+
+<script>
+    const priceDisplay = document.getElementById('price');
+    const lastUpdatedDisplay = document.getElementById('last-updated');
+
+    async function fetchPrice() {
+        try {
+            const response = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
+            if (!response.ok) {
+                throw new Error('Gagal mengambil data dari Binance API.');
+            }
+            const data = await response.json();
+            const price = parseFloat(data.price).toFixed(2);
+            priceDisplay.textContent = `$${price}`;
+
+            const now = new Date();
+            lastUpdatedDisplay.textContent = `Terakhir diperbarui: ${now.toLocaleTimeString()}`;
+
+        } catch (error) {
+            console.error('Terjadi kesalahan:', error);
+            priceDisplay.textContent = 'Gagal memuat harga';
+            lastUpdatedDisplay.textContent = 'Silakan coba lagi nanti.';
+        }
+    }
+
+    // Ambil harga saat halaman dimuat
+    fetchPrice();
+
+    // Perbarui harga setiap 5 detik
+    setInterval(fetchPrice, 5000);
+</script>
+
+</body>
+</html>
