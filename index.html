@@ -1,206 +1,86 @@
-<!doctype html>
+  <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>S/R Explorer — VPVR + Liquidations + Orderbook</title>
-  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
-  <style>canvas{width:100%!important;height:360px!important}</style>
+  <meta charset="UTF-8">
+  <title>BTCUSDT Live S/R & Liquidations</title>
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body { margin:0; background:#111; color:#eee; font-family:sans-serif; }
+    #chart { height: 90vh; }
+    #info { padding:10px; }
+    button { margin-right: 10px; }
+  </style>
 </head>
-<body class="bg-gray-50 text-gray-900 p-6">
-  <div class="max-w-6xl mx-auto">
-    <h1 class="text-2xl font-bold mb-4">S/R Explorer — VPVR + Liquidations + Orderbook markers</h1>
-
-    <div class="bg-white p-4 rounded shadow mb-4">
-      <p class="text-sm text-gray-700">This is a client-side tool. Upload CSVs (OHLCV 1m/5m), optional Orderbook snapshots CSV, and optional Liquidations CSV. No data leaves your browser.</p>
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-3">
-        <div>
-          <label class="block text-sm font-medium">OHLCV CSV (required)</label>
-          <input id="fileK" type="file" accept="text/csv" class="mt-1" />
-          <div class="text-xs text-gray-500 mt-1">Columns: open_time (ISO or ms), open, high, low, close, volume</div>
-        </div>
-        <div>
-          <label class="block text-sm font-medium">Orderbook CSV (optional)</label>
-          <input id="fileOB" type="file" accept="text/csv" class="mt-1" />
-          <div class="text-xs text-gray-500 mt-1">Columns: time, price, bid_size, ask_size (multiple snapshots ok)</div>
-        </div>
-        <div>
-          <label class="block text-sm font-medium">Liquidations CSV (optional)</label>
-          <input id="fileLiq" type="file" accept="text/csv" class="mt-1" />
-          <div class="text-xs text-gray-500 mt-1">Columns: time, price, qty, side (BUY/SELL)</div>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 lg:grid-cols-4 gap-3 mt-3">
-        <div>
-          <label class="block text-sm">VP Bin Size (USD)</label>
-          <input id="binSize" class="p-2 border rounded w-full" value="200" />
-        </div>
-        <div>
-          <label class="block text-sm">VP Window (bars)</label>
-          <input id="vpWindow" class="p-2 border rounded w-full" value="720" />
-        </div>
-        <div>
-          <label class="block text-sm">TF label</label>
-          <select id="tfLabel" class="p-2 border rounded w-full"><option>5m</option><option>1m</option><option>1h</option></select>
-        </div>
-        <div class="flex items-end">
-          <button id="runBtn" class="px-4 py-2 bg-blue-600 text-white rounded">Generate S/R</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <div class="col-span-2 bg-white p-4 rounded shadow">
-        <h2 class="font-semibold mb-2">Price Chart + Markers</h2>
-        <canvas id="priceChart"></canvas>
-      </div>
-      <div class="bg-white p-4 rounded shadow">
-        <h2 class="font-semibold mb-2">Volume Profile (VPVR)</h2>
-        <canvas id="vpChart"></canvas>
-      </div>
-    </div>
-
-    <div class="bg-white p-4 rounded shadow mt-4">
-      <h3 class="font-semibold mb-2">Top S/R Levels (by score)</h3>
-      <div id="levels" class="text-sm"></div>
-    </div>
-
-    <div class="text-xs text-gray-600 mt-3">Tip: for best results upload OHLCV with timezone ISO timestamps. Orderbook & liquidation CSVs allow confluence scoring.</div>
+<body>
+  <div id="info">
+    <button onclick="changeInterval('1m')">1m</button>
+    <button onclick="changeInterval('5m')">5m</button>
+    <button onclick="changeInterval('1h')">1h</button>
+    <button onclick="changeInterval('1d')">1d</button>
+    <span id="status">Connecting...</span>
   </div>
+  <div id="chart"></div>
 
-<script>
-// --- CSV parser (simple, tolerant) ---
-function parseCSV(text){
-  const lines = text.split(/\r?\n/).filter(l=>l.trim());
-  const header = lines[0].split(/,|;|\t/).map(h=>h.trim());
-  const rows = lines.slice(1).map(l=>{
-    const parts = l.split(/,|;|\t/);
-    const obj = {}; header.forEach((h,i)=> obj[h]=parts[i]!==undefined?parts[i].trim():null); return obj;
-  });
-  return {header, rows};
-}
+  <script>
+    let chart = LightweightCharts.createChart(document.getElementById('chart'), {
+      layout: { background: { color: '#111' }, textColor: '#ddd' },
+      grid: { vertLines: { color: '#333' }, horzLines: { color: '#333' } },
+      timeScale: { borderColor: '#555' },
+      rightPriceScale: { borderColor: '#555' }
+    });
 
-function tryParseTime(v){ if(!v) return null; if(/^[0-9]{10,}$/.test(v)) return new Date(Number(v)); const d = new Date(v); return isNaN(d)?null:d; }
+    let candleSeries = chart.addCandlestickSeries();
+    let liquidationSeries = chart.addScatterSeries({
+      color: 'red',
+      symbol: 'circle',
+      size: 6
+    });
 
-function toNumber(v){ const n = parseFloat(v); return isNaN(n)?null:n; }
+    let interval = '1m';
+    let wsKline, wsLiq;
 
-// --- VPVR computation ---
-function computeVP(rows, priceKey='close', volKey='volume', binSize=200, window=720){
-  const recent = rows.slice(-window);
-  const bins = {};
-  for(const r of recent){
-    const price = toNumber(r[priceKey]); const vol = toNumber(r[volKey])||0;
-    if(price==null) continue;
-    const b = Math.round(price/binSize)*binSize;
-    bins[b] = (bins[b]||0) + vol;
-  }
-  // convert to array sorted
-  const entries = Object.keys(bins).map(k=>({price:+k, vol:bins[k]})).sort((a,b)=>a.price-b.price);
-  return entries;
-}
+    function connectStreams() {
+      if (wsKline) wsKline.close();
+      if (wsLiq) wsLiq.close();
 
-// --- Aggregate orderbook snapshots into bins ---
-function aggregateOB(rows, binSize=200){
-  const bins = {};
-  for(const r of rows){
-    const price = toNumber(r.price); if(price==null) continue;
-    const bid = toNumber(r.bid_size)||0; const ask = toNumber(r.ask_size)||0;
-    const b = Math.round(price/binSize)*binSize;
-    if(!bins[b]) bins[b] = {bid:0, ask:0};
-    bins[b].bid += bid; bins[b].ask += ask;
-  }
-  return Object.keys(bins).map(k=>({price:+k, bid:bins[k].bid, ask:bins[k].ask})).sort((a,b)=>a.price-b.price);
-}
+      wsKline = new WebSocket(`wss://fstream.binance.com/ws/btcusdt@kline_${interval}`);
+      wsKline.onmessage = e => {
+        let msg = JSON.parse(e.data);
+        let k = msg.k;
+        candleSeries.update({
+          time: k.t / 1000,
+          open: parseFloat(k.o),
+          high: parseFloat(k.h),
+          low: parseFloat(k.l),
+          close: parseFloat(k.c)
+        });
+      };
 
-// --- Aggregate liquidations into bins ---
-function aggregateLiq(rows, binSize=200){
-  const bins = {};
-  for(const r of rows){
-    const price = toNumber(r.price); if(price==null) continue;
-    const qty = toNumber(r.qty)||0; const side = (r.side||'').toUpperCase();
-    const b = Math.round(price/binSize)*binSize;
-    if(!bins[b]) bins[b] = {buy:0, sell:0};
-    if(side==='BUY') bins[b].buy += qty; else bins[b].sell += qty;
-  }
-  return Object.keys(bins).map(k=>({price:+k, buy:bins[k].buy, sell:bins[k].sell})).sort((a,b)=>a.price-b.price);
-}
+      wsLiq = new WebSocket(`wss://fstream.binance.com/ws/btcusdt@forceOrder`);
+      wsLiq.onmessage = e => {
+        let msg = JSON.parse(e.data);
+        let o = msg.o;
+        let side = o.S; // BUY / SELL
+        let price = parseFloat(o.ap);
+        let qty = parseFloat(o.q);
 
-// --- Scoring & combine ---
-function scoreLevels(vp, obAgg, liqAgg){
-  // weights: vp=3, ob=2, liq=2
-  const scoreMap = {};
-  vp.forEach(e=>{ scoreMap[e.price] = (scoreMap[e.price]||0) + 3; });
-  obAgg.forEach(e=>{ if(e.bid>0) scoreMap[e.price] = (scoreMap[e.price]||0) + 2; if(e.ask>0) scoreMap[e.price] = (scoreMap[e.price]||0) + 2; });
-  liqAgg.forEach(e=>{ if(e.buy>0) scoreMap[e.price] = (scoreMap[e.price]||0) + 2; if(e.sell>0) scoreMap[e.price] = (scoreMap[e.price]||0) + 2; });
-  return Object.keys(scoreMap).map(k=>({price:+k, score:scoreMap[k]})).sort((a,b)=>b.score-a.score || b.price-a.price);
-}
+        liquidationSeries.update({
+          time: o.T / 1000,
+          position: price,
+          color: side === 'BUY' ? 'lime' : 'red',
+          size: Math.min(10, 4 + qty * 10)
+        });
+      };
 
-// --- Chart helpers ---
-let priceChart=null, vpChart=null;
+      document.getElementById('status').innerText = `Connected (${interval})`;
+    }
 
-function drawCharts(ohlcvRows, vpEntries, obAgg, liqAgg, levels){
-  const times = ohlcvRows.map(r=> new Date(r.open_time||r.time||r.timestamp).toLocaleString());
-  const closes = ohlcvRows.map(r=> toNumber(r.close));
-  // destroy
-  if(priceChart) priceChart.destroy(); if(vpChart) vpChart.destroy();
+    function changeInterval(newInterval) {
+      interval = newInterval;
+      connectStreams();
+    }
 
-  const ctx = document.getElementById('priceChart').getContext('2d');
-  priceChart = new Chart(ctx, {
-    type:'line', data:{labels: times, datasets:[{label:'Close', data: closes, borderColor:'rgb(16,185,129)', pointRadius:0, borderWidth:1.2}]},
-    options:{plugins:{legend:{display:false}}, scales:{x:{display:false}}}
-  });
-
-  // VP chart (horizontal bars) using Chart.js horizontal bar via 'bar' with indexAxis
-  const ctx2 = document.getElementById('vpChart').getContext('2d');
-  const labels = vpEntries.map(e=>e.price);
-  const dataVol = vpEntries.map(e=>e.vol);
-  vpChart = new Chart(ctx2, {type:'bar', data:{labels:labels, datasets:[{label:'Volume', data:dataVol}]}, options:{indexAxis:'y', plugins:{legend:{display:false}}}});
-
-  // annotate levels in a simple list
-  const lvlDiv = document.getElementById('levels'); lvlDiv.innerHTML='';
-  levels.slice(0,20).forEach(l=>{
-    const ob = obAgg.find(x=>x.price===l.price) || {bid:0,ask:0};
-    const li = liqAgg.find(x=>x.price===l.price) || {buy:0,sell:0};
-    const el = document.createElement('div'); el.className='p-2 border-b flex justify-between items-center';
-    el.innerHTML = `<div><b>${l.price.toLocaleString()}</b> <span class='text-xs text-gray-600'>score:${l.score}</span></div><div class='text-xs text-gray-700'>VP:${(vpEntries.find(v=>v.price===l.price)||{vol:0}).vol} | OB bid:${ob.bid} ask:${ob.ask} | Liq B:${li.buy} S:${li.sell}</div>`;
-    lvlDiv.appendChild(el);
-  });
-}
-
-// --- Run handler ---
-document.getElementById('runBtn').addEventListener('click', async ()=>{
-  const fK = document.getElementById('fileK').files[0];
-  const fOB = document.getElementById('fileOB').files[0];
-  const fL = document.getElementById('fileLiq').files[0];
-  if(!fK) return alert('Please upload OHLCV CSV');
-
-  const binSize = parseFloat(document.getElementById('binSize').value) || 200;
-  const vpWindow = parseInt(document.getElementById('vpWindow').value) || 720;
-
-  // read OHLCV
-  const txtK = await fK.text(); const parsedK = parseCSV(txtK); const rowsK = parsedK.rows.map(r=>({
-    open_time: tryParseTime(r.open_time||r.time||r.timestamp)||tryParseTime(r.open_time),
-    open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume
-  }));
-
-  // read OB
-  let rowsOB = [];
-  if(fOB){ const txtOB = await fOB.text(); const pOB = parseCSV(txtOB); rowsOB = pOB.rows.map(r=>({price:r.price, bid_size:r.bid_size, ask_size:r.ask_size, time:r.time})); }
-
-  // read liq
-  let rowsL = [];
-  if(fL){ const txtL = await fL.text(); const pL = parseCSV(txtL); rowsL = pL.rows.map(r=>({price:r.price, qty:r.qty, side:r.side, time:r.time})); }
-
-  // compute VPVR
-  const vp = computeVP(rowsK, 'close','volume', binSize, vpWindow);
-  const obAgg = aggregateOB(rowsOB, binSize);
-  const liqAgg = aggregateLiq(rowsL, binSize);
-  const levels = scoreLevels(vp, obAgg, liqAgg);
-
-  drawCharts(rowsK, vp, obAgg, liqAgg, levels);
-});
-</script>
+    connectStreams();
+  </script>
 </body>
 </html>
