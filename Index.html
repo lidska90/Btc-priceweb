@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>BTCUSDT Live Chart + Support/Resistance</title>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body { margin:0; background:#111; color:#eee; font-family:sans-serif; }
+        #chart { height: 90vh; }
+        #info { padding:10px; }
+        button { margin-right: 10px; padding: 5px 10px; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <button onclick="updateChart('1m')">1m</button>
+        <button onclick="updateChart('5m')">5m</button>
+        <button onclick="updateChart('1h')">1h</button>
+        <button onclick="updateChart('1d')">1d</button>
+        <span id="status">Loading...</span>
+    </div>
+    <div id="chart"></div>
+
+    <script>
+        const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+            layout: { background: { color: '#111' }, textColor: '#ddd' },
+            grid: { vertLines: { color: '#333' }, horzLines: { color: '#333' } },
+            timeScale: { borderColor: '#555' },
+            rightPriceScale: { borderColor: '#555' }
+        });
+
+        const candleSeries = chart.addCandlestickSeries();
+        const liquidationSeries = chart.addScatterSeries({
+            color: 'red',
+            symbol: 'circle',
+            size: 6
+        });
+
+        let currentInterval = '1m';
+        let srLines = [];
+        let wsKline = null;
+        let wsLiq = null;
+
+        async function fetchKlineHistory(interval) {
+            try {
+                const limit = 200;
+                const url = `https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`;
+                const res = await fetch(url);
+                
+                if (!res.ok) {
+                    throw new Error(`HTTP error! status: ${res.status}`);
+                }
+
+                const data = await res.json();
+                if (!Array.isArray(data)) {
+                    throw new Error('Invalid data format from API');
+                }
+
+                return data.map(d => ({
+                    time: d[0] / 1000,
+                    open: parseFloat(d[1]),
+                    high: parseFloat(d[2]),
+                    low: parseFloat(d[3]),
+                    close: parseFloat(d[4])
+                }));
+            } catch (error) {
+                console.error("Failed to fetch kline history:", error);
+                document.getElementById('status').innerText = 'Error loading data.';
+                return []; // Return empty array to prevent app crash
+            }
+        }
+
+        function detectSupportResistance(candles) {
+            srLines.forEach(line => chart.removeSeries(line));
+            srLines = [];
+
+            if (candles.length < 1) return;
+
+            const highs = candles.map(c => c.high).filter(h => !isNaN(h));
+            const lows = candles.map(c => c.low).filter(l => !isNaN(l));
+            const prices = [...highs, ...lows].sort((a, b) => a - b);
+            
+            if (prices.length === 0) return;
+
+            const threshold = (prices[prices.length - 1] - prices[0]) / 50;
+
+            const clusters = [];
+            for (const p of prices) {
+                const found = clusters.find(c => Math.abs(c.price - p) < threshold);
+                if (found) {
+                    found.count++;
+                } else {
+                    clusters.push({ price: p, count: 1 });
+                }
+            }
+
+            clusters.sort((a, b) => b.count - a.count);
+            const levels = clusters.slice(0, 5);
+
+            levels.forEach(l => {
+                const line = chart.addLineSeries({
+                    color: '#ffaa00',
+                    lineWidth: 1,
+                    lineStyle: 2
+                });
+                line.setData([{ time: candles[0].time, value: l.price }, { time: candles[candles.length - 1].time, value: l.price }]);
+                srLines.push(line);
+            });
+        }
+
+        function connectStreams() {
+            if (wsKline) wsKline.close();
+            if (wsLiq) wsLiq.close();
+
+            // Kline stream
+            wsKline = new WebSocket(`wss://fstream.binance.com/ws/btcusdt@kline_${currentInterval}`);
+            wsKline.onmessage = e => {
+                const msg = JSON.parse(e.data);
+                const k = msg.k;
+                candleSeries.update({
+                    time: k.t / 1000,
+                    open: parseFloat(k.o),
+                    high: parseFloat(k.h),
+                    low: parseFloat(k.l),
+                    close: parseFloat(k.c)
+                });
+            };
+            wsKline.onclose = () => {
+                console.log('Kline stream disconnected, reconnecting...');
+                document.getElementById('status').innerText = 'Reconnecting...';
+                setTimeout(connectStreams, 5000);
+            };
+            wsKline.onerror = (error) => {
+                console.error('Kline stream error:', error);
+                document.getElementById('status').innerText = 'Stream error.';
+            };
+
+            // Liquidation stream
+            wsLiq = new WebSocket(`wss://fstream.binance.com/ws/btcusdt@forceOrder`);
+            wsLiq.onmessage = e => {
+                const msg = JSON.parse(e.data);
+                const o = msg.o;
+                const side = o.S;
+                const price = parseFloat(o.ap);
+                const qty = parseFloat(o.q);
+                liquidationSeries.update({
+                    time: o.T / 1000,
+                    position: price,
+                    color: side === 'BUY' ? 'lime' : 'red',
+                    size: Math.min(12, 4 + qty * 5)
+                });
+            };
+            wsLiq.onerror = (error) => {
+                console.error('Liquidation stream error:', error);
+            };
+        }
+
+        async function updateChart(newInterval) {
+            currentInterval = newInterval;
+            document.getElementById('status').innerText = `Loading...`;
+            
+            const history = await fetchKlineHistory(currentInterval);
+            if (history.length > 0) {
+                candleSeries.setData(history);
+                detectSupportResistance(history);
+            }
+            connectStreams();
+
+            document.getElementById('status').innerText = `Connected (${currentInterval})`;
+        }
+
+        updateChart(currentInterval);
+    </script>
+</body>
+</html>
